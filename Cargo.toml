@@ -1,0 +1,32 @@
+[package]
+authors = [ "sleaze" ]
+description = "Lightweight, customizable crosshair overlay"
+edition = "2024"
+license = "MIT"
+name = "deadeye"
+publish = false
+repository = "https://github.com/sleaze5/deadeye"
+version = "1.0.0"
+
+[workspace]
+members = [ "xtask" ]
+
+[dependencies]
+serde = { version = "1.0.229", features = [ "derive" ] }
+serde_json = "1.0.151"
+windows-sys = { version = "0.61.2", features = [ "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_Controls_Dialogs", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging" ] }
+
+[build-dependencies]
+embed-resource = "3.0.12"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true
+
+[profile.dev.package.xtask]
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3

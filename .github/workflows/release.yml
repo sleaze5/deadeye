@@ -1,0 +1,58 @@
+name: Release
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - Cargo.toml
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+concurrency:
+    group: release
+
+jobs:
+    release:
+        runs-on: windows-latest
+        defaults:
+            run:
+                shell: bash
+        env:
+            GH_TOKEN: ${{ github.token }}
+            TARGET: x86_64-pc-windows-msvc
+        steps:
+            - uses: actions/checkout@v5
+
+            - name: Read version
+              id: version
+              run: |
+                  version=$(cargo metadata --no-deps --format-version 1 \
+                    | jq -r '.packages[] | select(.name == "deadeye") | .version')
+                  echo "tag=v$version" >> "$GITHUB_OUTPUT"
+                  if gh release view "v$version" > /dev/null 2>&1; then
+                    echo "Release v$version already exists, skipping."
+                    echo "exists=true" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - uses: dtolnay/rust-toolchain@stable
+              if: steps.version.outputs.exists != 'true'
+              with:
+                  targets: ${{ env.TARGET }}
+
+            - name: Build
+              if: steps.version.outputs.exists != 'true'
+              run: |
+                  cargo build --release --locked --package deadeye --target "$TARGET"
+                  cp "target/$TARGET/release/deadeye.exe" "deadeye-${{ steps.version.outputs.tag }}.exe"
+
+            - name: Publish
+              if: steps.version.outputs.exists != 'true'
+              run: |
+                  gh release create "${{ steps.version.outputs.tag }}" \
+                    "deadeye-${{ steps.version.outputs.tag }}.exe" \
+                    --target "$GITHUB_SHA" \
+                    --title "Deadeye ${{ steps.version.outputs.tag }}" \
+                    --generate-notes
