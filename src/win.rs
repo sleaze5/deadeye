@@ -7,7 +7,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::PCWSTR;
 use windows_sys::w;
 
-pub type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
 pub fn wide(text: &str) -> Vec<u16> {
 	text.encode_utf16().chain(Some(0)).collect()
@@ -36,16 +36,42 @@ pub fn bitmap_info(width: i32, height: i32) -> BITMAPINFO {
 	}
 }
 
-pub fn register_class(name: PCWSTR, wnd_proc: WndProc) {
-	let class = WNDCLASSW {
+pub fn create_window(
+	name: &str,
+	class: PCWSTR,
+	wnd_proc: WndProc,
+	style: WINDOW_STYLE,
+	ex_style: WINDOW_EX_STYLE,
+) -> HWND {
+	let class_info = WNDCLASSW {
 		lpfnWndProc: Some(wnd_proc),
 		hInstance: instance(),
-		lpszClassName: name,
+		lpszClassName: class,
 		..unsafe { mem::zeroed() }
 	};
-	if unsafe { RegisterClassW(&class) } == 0 {
+	if unsafe { RegisterClassW(&class_info) } == 0 {
 		fail("Failed to register window class.");
 	}
+	let hwnd = unsafe {
+		CreateWindowExW(
+			ex_style,
+			class,
+			w!("Deadeye"),
+			style,
+			0,
+			0,
+			0,
+			0,
+			ptr::null_mut(),
+			ptr::null_mut(),
+			instance(),
+			ptr::null(),
+		)
+	};
+	if hwnd.is_null() {
+		fail(&format!("Failed to create {name} window."));
+	}
+	hwnd
 }
 
 pub fn show_error(owner: HWND, message: &str) {

@@ -35,6 +35,12 @@ pub const ID_DOT_SHAPE: i32 = 145;
 pub const ID_DOT_OPACITY: i32 = 146;
 pub const ID_DOT_OUTLINE: i32 = 148;
 
+/// The control that follows a color edit, number edit or opacity trackbar in the
+/// dialog template: its picker button, up-down arrows or value label.
+pub const fn companion(id: i32) -> i32 {
+	id + 1
+}
+
 pub const OUTLINE_COLOR: i32 = 1;
 pub const OUTLINE_THICKNESS: i32 = 3;
 pub const OUTLINE_OPACITY: i32 = 5;

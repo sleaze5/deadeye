@@ -29,7 +29,7 @@ pub fn active() -> String {
 }
 
 pub fn is_default() -> bool {
-	same_name(&active(), DEFAULT_PROFILE)
+	CONFIG.with_borrow(Config::is_default_active)
 }
 
 pub fn saved() -> Crosshair {
@@ -104,7 +104,7 @@ fn update(
 }
 
 fn ensure_not_default(config: &Config, action: &str) -> Result<(), String> {
-	if same_name(&config.active, DEFAULT_PROFILE) {
+	if config.is_default_active() {
 		return Err(format!("The {DEFAULT_PROFILE} profile can't be {action}."));
 	}
 	Ok(())

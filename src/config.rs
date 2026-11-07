@@ -164,11 +164,14 @@ impl Config {
 	}
 
 	pub fn active_mut(&mut self) -> &mut Profile {
-		let active = self.active.clone();
 		self.profiles
 			.iter_mut()
-			.find(|profile| same_name(&profile.name, &active))
+			.find(|profile| same_name(&profile.name, &self.active))
 			.expect("the active profile exists")
+	}
+
+	pub fn is_default_active(&self) -> bool {
+		same_name(&self.active, DEFAULT_PROFILE)
 	}
 
 	fn normalized(mut self) -> Self {
@@ -274,21 +277,15 @@ pub fn load() -> (Config, Option<String>) {
 		Ok(path) => path,
 		Err(e) => return (Config::default(), Some(e)),
 	};
-	let json = match fs::read_to_string(&path) {
-		Ok(text) => serde_json::from_str::<Value>(&text).ok().filter(Value::is_object),
+	let bytes = match fs::read(&path) {
+		Ok(bytes) => bytes,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => {
 			return (Config::default(), None);
 		},
-		Err(e) if e.kind() == io::ErrorKind::InvalidData => None,
-		Err(e) => {
-			let message = format!(
-				"Failed to load settings, using defaults.\n\n{}: {e}",
-				path.display()
-			);
-			return (Config::default(), Some(message));
-		},
+		Err(e) => return (Config::default(), Some(load_failed(&path, e))),
 	};
-	let Some(json) = json else {
+	let Some(json) = serde_json::from_slice(&bytes).ok().filter(Value::is_object)
+	else {
 		return (Config::default(), Some(back_up(&path)));
 	};
 	let config = from_json(&json);
@@ -358,11 +355,12 @@ fn back_up(path: &Path) -> String {
 			"Your settings file couldn't be read, so defaults are used.\n\nThe old file was moved to {}.",
 			backup.display()
 		),
-		Err(e) => format!(
-			"Failed to load settings, using defaults.\n\n{}: {e}",
-			path.display()
-		),
+		Err(e) => load_failed(path, e),
 	}
+}
+
+fn load_failed(path: &Path, e: io::Error) -> String {
+	format!("Failed to load settings, using defaults.\n\n{}: {e}", path.display())
 }
 
 pub fn save(config: &Config) -> Result<(), String> {

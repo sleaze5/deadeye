@@ -16,10 +16,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::PCWSTR;
 use windows_sys::w;
 
-use self::controls::{checked, enable, opacity, parse, set_checked, set_opacity, set_text};
+use self::controls::{
+	checked, enable, init_opacity, opacity, parse, set_checked, set_opacity, set_text,
+};
 use self::ids::*;
 use crate::config::{Bars, Color, Crosshair, Dot, Outline, Shape, same_name};
 use crate::{overlay, profiles, render, win};
+
+const SHAPE_NAMES: [(Shape, &str); 2] =
+	[(Shape::Rounded, "Rounded"), (Shape::Sharp, "Sharp")];
 
 thread_local! {
 	static DIALOG: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
@@ -79,7 +84,7 @@ unsafe extern "system" fn dialog_proc(
 			open_repository(dialog)
 		},
 		WM_DRAWITEM => preview::draw(unsafe { &*(lparam as *const DRAWITEMSTRUCT) }),
-		WM_DESTROY => on_destroy(),
+		WM_DESTROY => DIALOG.set(ptr::null_mut()),
 		_ => return 0,
 	}
 	1
@@ -92,26 +97,33 @@ fn init(dialog: HWND) {
 		SendMessageW(dialog, WM_SETICON, ICON_BIG as usize, big as isize);
 		SendMessageW(dialog, WM_SETICON, ICON_SMALL as usize, small as isize);
 		for id in SHAPES {
-			for name in [w!("Rounded"), w!("Sharp")] {
-				SendDlgItemMessageW(dialog, id, CB_ADDSTRING, 0, name as isize);
+			for (_, name) in SHAPE_NAMES {
+				let name = win::wide(name);
+				SendDlgItemMessageW(
+					dialog,
+					id,
+					CB_ADDSTRING,
+					0,
+					name.as_ptr() as isize,
+				);
 			}
 		}
 		for (id, range) in NUMBERS {
 			let (min, max) = (*range.start(), *range.end());
 			SendDlgItemMessageW(
 				dialog,
-				id + 1,
+				companion(id),
 				UDM_SETRANGE32,
 				min as usize,
 				max as isize,
 			);
 		}
-		for id in OPACITIES {
-			SendDlgItemMessageW(dialog, id, TBM_SETRANGEMAX, 0, 100);
-		}
 		for id in COLORS {
 			SendDlgItemMessageW(dialog, id, EM_SETLIMITTEXT, 7, 0);
 		}
+	}
+	for id in OPACITIES {
+		init_opacity(dialog, id);
 	}
 	fill_profiles(dialog);
 	set_checked(dialog, ID_SCALING, profiles::windows_scaling());
@@ -142,17 +154,18 @@ fn on_command(dialog: HWND, id: i32, code: u32) {
 }
 
 fn on_setting_command(dialog: HWND, id: i32, code: u32) {
-	match (id, code) {
-		(ID_BARS, BN_CLICKED) => {
+	let picked_color = COLORS.into_iter().find(|&color| companion(color) == id);
+	match (id, code, picked_color) {
+		(ID_BARS, BN_CLICKED, _) => {
 			let on = checked(dialog, ID_BARS);
 			for side in ID_BAR_TOP..=ID_BAR_RIGHT {
 				set_checked(dialog, side, on);
 			}
 			changed(dialog);
 		},
-		(_, BN_CLICKED) if COLORS.contains(&(id - 1)) => pick_color(dialog, id - 1),
-		(_, EN_KILLFOCUS) => write(dialog, overlay::crosshair()),
-		(_, BN_CLICKED | EN_CHANGE | CBN_SELCHANGE) => changed(dialog),
+		(_, BN_CLICKED, Some(color)) => pick_color(dialog, color),
+		(_, EN_KILLFOCUS, _) => write(dialog, overlay::crosshair()),
+		(_, BN_CLICKED | EN_CHANGE | CBN_SELCHANGE, _) => changed(dialog),
 		_ => {},
 	}
 }
@@ -174,15 +187,11 @@ fn open_repository(dialog: HWND) {
 	}
 }
 
-fn on_destroy() {
-	DIALOG.set(ptr::null_mut());
-}
-
 fn toggle_scaling(dialog: HWND) {
 	let on = checked(dialog, ID_SCALING);
 	match profiles::set_windows_scaling(on) {
 		Ok(()) => {
-			overlay::set_windows_scaling(on);
+			overlay::refresh();
 			sync(dialog, overlay::crosshair());
 		},
 		Err(e) => {
@@ -305,7 +314,7 @@ fn read(dialog: HWND, previous: Crosshair) -> Crosshair {
 			length: parse(dialog, ID_BAR_LENGTH, bars.length),
 			thickness: parse(dialog, ID_BAR_THICKNESS, bars.thickness),
 			gap: parse(dialog, ID_BAR_GAP, bars.gap),
-			shape: read_shape(dialog, ID_BAR_SHAPE),
+			shape: read_shape(dialog, ID_BAR_SHAPE, bars.shape),
 			opacity: opacity(dialog, ID_BAR_OPACITY),
 			outline: read_outline(dialog, ID_BAR_OUTLINE, bars.outline),
 		},
@@ -313,7 +322,7 @@ fn read(dialog: HWND, previous: Crosshair) -> Crosshair {
 			enabled: checked(dialog, ID_DOT),
 			color: parse(dialog, ID_DOT_COLOR, dot.color),
 			size: parse(dialog, ID_DOT_SIZE, dot.size),
-			shape: read_shape(dialog, ID_DOT_SHAPE),
+			shape: read_shape(dialog, ID_DOT_SHAPE, dot.shape),
 			opacity: opacity(dialog, ID_DOT_OPACITY),
 			outline: read_outline(dialog, ID_DOT_OUTLINE, dot.outline),
 		},
@@ -321,11 +330,12 @@ fn read(dialog: HWND, previous: Crosshair) -> Crosshair {
 	.clamped()
 }
 
-fn read_shape(dialog: HWND, id: i32) -> Shape {
-	match unsafe { SendDlgItemMessageW(dialog, id, CB_GETCURSEL, 0, 0) } {
-		0 => Shape::Rounded,
-		_ => Shape::Sharp,
-	}
+fn read_shape(dialog: HWND, id: i32, previous: Shape) -> Shape {
+	let index = unsafe { SendDlgItemMessageW(dialog, id, CB_GETCURSEL, 0, 0) };
+	usize::try_from(index)
+		.ok()
+		.and_then(|index| SHAPE_NAMES.get(index))
+		.map_or(previous, |&(shape, _)| shape)
 }
 
 fn read_outline(dialog: HWND, id: i32, previous: Outline) -> Outline {
@@ -362,8 +372,15 @@ fn write(dialog: HWND, crosshair: Crosshair) {
 }
 
 fn write_shape(dialog: HWND, id: i32, shape: Shape) {
+	let index = SHAPE_NAMES.iter().position(|&(option, _)| option == shape);
 	unsafe {
-		SendDlgItemMessageW(dialog, id, CB_SETCURSEL, shape as usize, 0);
+		SendDlgItemMessageW(
+			dialog,
+			id,
+			CB_SETCURSEL,
+			index.expect("every shape is listed"),
+			0,
+		);
 	}
 }
 
@@ -380,7 +397,7 @@ fn sync(dialog: HWND, crosshair: Crosshair) {
 	let opacities =
 		[bars.opacity, bars.outline.opacity, dot.opacity, dot.outline.opacity];
 	for (id, value) in OPACITIES.into_iter().zip(opacities) {
-		set_text(dialog, id + 1, &format!("{value:.2}"));
+		set_text(dialog, companion(id), &format!("{value:.2}"));
 	}
 	enable(dialog, ID_BAR_COLOR..=ID_BAR_OUTLINE, bars.any());
 	enable(
@@ -396,12 +413,8 @@ fn sync(dialog: HWND, crosshair: Crosshair) {
 	);
 	let default = profiles::is_default();
 	set_text(dialog, ID_DELETE, if default { "Reset" } else { "Delete" });
-	enable(dialog, ID_RENAME..=ID_RENAME, !default);
-	enable(
-		dialog,
-		ID_DELETE..=ID_DELETE,
-		!default || crosshair != Crosshair::default(),
-	);
+	enable(dialog, [ID_RENAME], !default);
+	enable(dialog, [ID_DELETE], !default || crosshair != Crosshair::default());
 	enable(dialog, ID_SAVE..=ID_REVERT, crosshair != profiles::saved());
 	let scale = overlay::scale();
 	let (width, height) = render::render(&crosshair, scale).visible_size();
@@ -413,7 +426,7 @@ fn sync(dialog: HWND, crosshair: Crosshair) {
 }
 
 fn outline_controls(id: i32) -> RangeInclusive<i32> {
-	id + OUTLINE_COLOR..=id + OUTLINE_OPACITY + 1
+	id + OUTLINE_COLOR..=companion(id + OUTLINE_OPACITY)
 }
 
 fn pick_color(dialog: HWND, id: i32) {
