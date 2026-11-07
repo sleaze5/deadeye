@@ -23,7 +23,7 @@ fn main() {
 	}
 
 	profiles::load();
-	overlay::create(profiles::saved(), profiles::windows_scaling());
+	overlay::create(profiles::saved());
 	tray::create();
 	run();
 }

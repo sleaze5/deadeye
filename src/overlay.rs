@@ -8,42 +8,26 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::w;
 
 use crate::config::Crosshair;
-use crate::{render, win};
+use crate::{profiles, render, win};
 
 thread_local! {
 	static WINDOW: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
 	static CROSSHAIR: Cell<Crosshair> = Cell::new(Crosshair::default());
-	static WINDOWS_SCALING: Cell<bool> = const { Cell::new(true) };
 }
 
-pub fn create(crosshair: Crosshair, windows_scaling: bool) {
-	let class = w!("DeadeyeOverlay");
-	win::register_class(class, wnd_proc);
-	let hwnd = unsafe {
-		CreateWindowExW(
-			WS_EX_LAYERED
-				| WS_EX_TRANSPARENT
-				| WS_EX_TOPMOST
-				| WS_EX_TOOLWINDOW
-				| WS_EX_NOACTIVATE,
-			class,
-			w!("Deadeye"),
-			WS_POPUP,
-			0,
-			0,
-			0,
-			0,
-			ptr::null_mut(),
-			ptr::null_mut(),
-			win::instance(),
-			ptr::null(),
-		)
-	};
-	if hwnd.is_null() {
-		win::fail("Failed to create overlay window.");
-	}
+pub fn create(crosshair: Crosshair) {
+	let hwnd = win::create_window(
+		"overlay",
+		w!("DeadeyeOverlay"),
+		wnd_proc,
+		WS_POPUP,
+		WS_EX_LAYERED
+			| WS_EX_TRANSPARENT
+			| WS_EX_TOPMOST
+			| WS_EX_TOOLWINDOW
+			| WS_EX_NOACTIVATE,
+	);
 	WINDOW.set(hwnd);
-	WINDOWS_SCALING.set(windows_scaling);
 	apply(crosshair);
 	unsafe {
 		ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -59,13 +43,12 @@ pub fn apply(crosshair: Crosshair) {
 	present(WINDOW.get());
 }
 
-pub fn set_windows_scaling(on: bool) {
-	WINDOWS_SCALING.set(on);
+pub fn refresh() {
 	present(WINDOW.get());
 }
 
 pub fn scale() -> f32 {
-	if WINDOWS_SCALING.get() {
+	if profiles::windows_scaling() {
 		unsafe { GetDpiForWindow(WINDOW.get()) as f32 / 96.0 }
 	} else {
 		1.0

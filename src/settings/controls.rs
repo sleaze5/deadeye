@@ -1,4 +1,3 @@
-use std::ops::RangeInclusive;
 use std::str::FromStr;
 
 use windows_sys::Win32::Foundation::*;
@@ -9,8 +8,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::win;
 
 const TBM_GETPOS: u32 = WM_USER;
+const OPACITY_STEPS: f32 = 100.0;
 
-pub fn enable(dialog: HWND, ids: RangeInclusive<i32>, on: bool) {
+pub fn enable(dialog: HWND, ids: impl IntoIterator<Item = i32>, on: bool) {
 	for id in ids {
 		unsafe {
 			EnableWindow(GetDlgItem(dialog, id), on.into());
@@ -29,8 +29,14 @@ pub fn set_checked(dialog: HWND, id: i32, on: bool) {
 	}
 }
 
+pub fn init_opacity(dialog: HWND, id: i32) {
+	unsafe {
+		SendDlgItemMessageW(dialog, id, TBM_SETRANGEMAX, 0, OPACITY_STEPS as isize);
+	}
+}
+
 pub fn opacity(dialog: HWND, id: i32) -> f32 {
-	unsafe { SendDlgItemMessageW(dialog, id, TBM_GETPOS, 0, 0) as f32 / 100.0 }
+	unsafe { SendDlgItemMessageW(dialog, id, TBM_GETPOS, 0, 0) as f32 / OPACITY_STEPS }
 }
 
 pub fn set_opacity(dialog: HWND, id: i32, value: f32) {
@@ -40,7 +46,7 @@ pub fn set_opacity(dialog: HWND, id: i32, value: f32) {
 			id,
 			TBM_SETPOS,
 			1,
-			(value * 100.0).round() as isize,
+			(value * OPACITY_STEPS).round() as isize,
 		);
 	}
 }

@@ -16,31 +16,12 @@ const ID_EXIT: usize = 3;
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 pub fn create() {
-	let class = w!("DeadeyeTray");
-	win::register_class(class, wnd_proc);
 	unsafe {
 		TASKBAR_CREATED
 			.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 	}
-	let hwnd = unsafe {
-		CreateWindowExW(
-			0,
-			class,
-			w!("Deadeye"),
-			WS_OVERLAPPED,
-			0,
-			0,
-			0,
-			0,
-			ptr::null_mut(),
-			ptr::null_mut(),
-			win::instance(),
-			ptr::null(),
-		)
-	};
-	if hwnd.is_null() {
-		win::fail("Failed to create tray window.");
-	}
+	let hwnd =
+		win::create_window("tray", w!("DeadeyeTray"), wnd_proc, WS_OVERLAPPED, 0);
 	add_icon(hwnd);
 }
 

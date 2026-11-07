@@ -30,13 +30,13 @@ pub struct Profile {
 	pub crosshair: Crosshair,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Crosshair {
 	pub bars: Bars,
 	pub dot: Dot,
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bars {
 	pub top: bool,
 	pub bottom: bool,
@@ -51,7 +51,7 @@ pub struct Bars {
 	pub outline: Outline,
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Dot {
 	pub enabled: bool,
 	pub color: Color,
@@ -61,7 +61,7 @@ pub struct Dot {
 	pub outline: Outline,
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Outline {
 	pub enabled: bool,
 	pub color: Color,
@@ -69,13 +69,13 @@ pub struct Outline {
 	pub opacity: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Shape {
 	Rounded,
 	Sharp,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Color {
 	pub r: u8,
@@ -164,11 +164,14 @@ impl Config {
 	}
 
 	pub fn active_mut(&mut self) -> &mut Profile {
-		let active = self.active.clone();
 		self.profiles
 			.iter_mut()
-			.find(|profile| same_name(&profile.name, &active))
+			.find(|profile| same_name(&profile.name, &self.active))
 			.expect("the active profile exists")
+	}
+
+	pub fn is_default_active(&self) -> bool {
+		same_name(&self.active, DEFAULT_PROFILE)
 	}
 
 	fn normalized(mut self) -> Self {
@@ -274,21 +277,15 @@ pub fn load() -> (Config, Option<String>) {
 		Ok(path) => path,
 		Err(e) => return (Config::default(), Some(e)),
 	};
-	let json = match fs::read_to_string(&path) {
-		Ok(text) => serde_json::from_str::<Value>(&text).ok().filter(Value::is_object),
+	let bytes = match fs::read(&path) {
+		Ok(bytes) => bytes,
 		Err(e) if e.kind() == io::ErrorKind::NotFound => {
 			return (Config::default(), None);
 		},
-		Err(e) if e.kind() == io::ErrorKind::InvalidData => None,
-		Err(e) => {
-			let message = format!(
-				"Failed to load settings, using defaults.\n\n{}: {e}",
-				path.display()
-			);
-			return (Config::default(), Some(message));
-		},
+		Err(e) => return (Config::default(), Some(load_failed(&path, e))),
 	};
-	let Some(json) = json else {
+	let Some(json) = serde_json::from_slice(&bytes).ok().filter(Value::is_object)
+	else {
 		return (Config::default(), Some(back_up(&path)));
 	};
 	let config = from_json(&json);
@@ -358,11 +355,12 @@ fn back_up(path: &Path) -> String {
 			"Your settings file couldn't be read, so defaults are used.\n\nThe old file was moved to {}.",
 			backup.display()
 		),
-		Err(e) => format!(
-			"Failed to load settings, using defaults.\n\n{}: {e}",
-			path.display()
-		),
+		Err(e) => load_failed(path, e),
 	}
+}
+
+fn load_failed(path: &Path, e: io::Error) -> String {
+	format!("Failed to load settings, using defaults.\n\n{}: {e}", path.display())
 }
 
 pub fn save(config: &Config) -> Result<(), String> {
@@ -372,12 +370,93 @@ pub fn save(config: &Config) -> Result<(), String> {
 	config
 		.serialize(&mut Serializer::with_formatter(&mut json, formatter))
 		.map_err(|e| e.to_string())?;
+	// Writing a temporary file and renaming it over the old one means a crash
+	// mid-write can't leave a truncated settings file behind.
+	let temp = path.with_extension("json.tmp");
 	fs::create_dir_all(path.parent().expect("config path has a parent"))
-		.and_then(|()| fs::write(&path, json))
+		.and_then(|()| fs::write(&temp, json))
+		.and_then(|()| fs::rename(&temp, &path))
 		.map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn path() -> Result<PathBuf, String> {
 	let local = std::env::var_os("LOCALAPPDATA").ok_or("LOCALAPPDATA is not set")?;
 	Ok(PathBuf::from(local).join("deadeye").join("config.json"))
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::json;
+
+	use super::*;
+
+	#[test]
+	fn colors_parse_with_or_without_hash_and_print_uppercase() {
+		let color: Color = "00ff7f".parse().unwrap();
+		assert_eq!(color, "#00FF7F".parse().unwrap());
+		assert_eq!(color.to_string(), "#00FF7F");
+		for invalid in ["", "#12345", "#1234567", "#GG0000", "#00ff7f "] {
+			assert!(invalid.parse::<Color>().is_err(), "{invalid:?}");
+		}
+	}
+
+	#[test]
+	fn invalid_settings_fall_back_one_field_at_a_time() {
+		let config = from_json(&json!({
+			"default": {
+				"bars": { "length": 500, "gap": "wide", "color": "#ff0000", "shape": "Sharp" },
+				"dot": { "enabled": false, "opacity": -1.0, "color": "red" },
+			},
+		}));
+		let crosshair = config.active().crosshair;
+		let default = Crosshair::default();
+		assert_eq!(crosshair.bars.length, *LENGTH_RANGE.end());
+		assert_eq!(crosshair.bars.gap, default.bars.gap);
+		assert_eq!(crosshair.bars.color, Color { r: 0xFF, g: 0, b: 0 });
+		assert_eq!(crosshair.bars.shape, Shape::Sharp);
+		assert!(!crosshair.dot.enabled);
+		assert_eq!(crosshair.dot.opacity, 0.0);
+		assert_eq!(crosshair.dot.color, default.dot.color);
+	}
+
+	#[test]
+	fn profiles_are_deduplicated_and_the_active_name_resolved() {
+		let config = from_json(&json!({
+			"active": "MAIN",
+			"profiles": [
+				{ "name": "Main", "crosshair": { "dot": { "size": 9 } } },
+				{ "name": "main" },
+				{ "name": "DEFAULT" },
+				{ "name": "  " },
+				{ "crosshair": {} },
+				{ "name": "Other" },
+			],
+		}));
+		let names: Vec<&str> =
+			config.profiles.iter().map(|profile| profile.name.as_str()).collect();
+		assert_eq!(names, [DEFAULT_PROFILE, "Main", "Other"]);
+		assert_eq!(config.active, "Main");
+		assert_eq!(config.active().crosshair.dot.size, 9);
+	}
+
+	#[test]
+	fn an_unknown_active_profile_falls_back_to_the_default() {
+		let config = from_json(&json!({ "active": "Gone", "windows_scaling": false }));
+		assert_eq!(config.active, DEFAULT_PROFILE);
+		assert!(!config.windows_scaling);
+		assert!(Config::default().windows_scaling);
+	}
+
+	#[test]
+	fn saved_settings_load_back_unchanged() {
+		let mut config = from_json(&json!({
+			"active": "Wide",
+			"windows_scaling": false,
+			"profiles": [{ "name": "Wide", "crosshair": { "bars": { "gap": 30 } } }],
+		}));
+		config.active_mut().crosshair.dot.color = Color { r: 1, g: 2, b: 3 };
+		let saved = serde_json::to_value(&config).unwrap();
+		assert_eq!(saved["version"], VERSION);
+		assert_eq!(serde_json::to_value(from_json(&saved)).unwrap(), saved);
+	}
 }
