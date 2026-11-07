@@ -194,3 +194,59 @@ impl RoundedRect {
 		dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - self.radius
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::config::Bars;
+
+	fn without_bars() -> Crosshair {
+		let mut crosshair = Crosshair::default();
+		crosshair.bars = Bars {
+			top: false,
+			bottom: false,
+			left: false,
+			right: false,
+			..crosshair.bars
+		};
+		crosshair
+	}
+
+	#[test]
+	fn bars_reach_past_gap_length_and_outline_on_each_side() {
+		let crosshair = Crosshair::default();
+		let Bars { length, thickness, gap, outline, .. } = crosshair.bars;
+		let reach = gap + length + outline.thickness;
+		assert_eq!(thickness % 2, 1, "an odd thickness centers on a pixel");
+		assert_eq!(
+			render(&crosshair, 1.0).visible_size(),
+			(2 * reach + 1, 2 * reach + 1)
+		);
+		assert_eq!(render(&crosshair, 2.0).visible_size(), (4 * reach, 4 * reach));
+	}
+
+	#[test]
+	fn a_lone_dot_spans_its_size_and_outline() {
+		let crosshair = without_bars();
+		let expected = crosshair.dot.size + 2 * crosshair.dot.outline.thickness;
+		assert_eq!(render(&crosshair, 1.0).visible_size(), (expected, expected));
+	}
+
+	#[test]
+	fn hidden_bars_leave_their_axis() {
+		let mut crosshair = Crosshair::default();
+		crosshair.bars.left = false;
+		crosshair.bars.right = false;
+		let (width, height) = render(&crosshair, 1.0).visible_size();
+		assert!(width < height);
+	}
+
+	#[test]
+	fn a_hidden_crosshair_draws_nothing() {
+		let mut crosshair = without_bars();
+		crosshair.dot.enabled = false;
+		let image = render(&crosshair, 1.5);
+		assert!(image.pixels.iter().all(|&pixel| pixel == 0));
+		assert_eq!(image.visible_size(), (0, 0));
+	}
+}

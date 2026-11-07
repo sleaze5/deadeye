@@ -136,3 +136,37 @@ fn valid_name(
 	}
 	Ok(name.into())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn config() -> Config {
+		let mut config = Config::default();
+		config
+			.profiles
+			.push(Profile { name: "Main".into(), crosshair: Crosshair::default() });
+		config
+	}
+
+	#[test]
+	fn new_names_are_trimmed_and_must_be_unique() {
+		let config = config();
+		assert_eq!(valid_name(&config, "  Wide ", None).unwrap(), "Wide");
+		assert!(valid_name(&config, "MAIN", None).is_err());
+		assert!(valid_name(&config, "default", None).is_err());
+		assert!(valid_name(&config, " ", None).is_err());
+		assert!(valid_name(&config, &"x".repeat(MAX_NAME_LENGTH), None).is_ok());
+		assert!(valid_name(&config, &"x".repeat(MAX_NAME_LENGTH + 1), None).is_err());
+	}
+
+	#[test]
+	fn a_profile_can_be_renamed_to_a_different_case_of_its_own_name() {
+		let mut config = config();
+		config
+			.profiles
+			.push(Profile { name: "Other".into(), crosshair: Crosshair::default() });
+		assert_eq!(valid_name(&config, "MAIN", Some("Main")).unwrap(), "MAIN");
+		assert!(valid_name(&config, "other", Some("Main")).is_err());
+	}
+}
