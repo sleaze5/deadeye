@@ -14,7 +14,7 @@ const RENDER_SIZE: u32 = SIZES[SIZES.len() - 1] * 4;
 const USAGE: &str = "Usage: cargo xtask <task>
 
 Tasks:
-  check             Run lints and static analysis
+  check             Run lints, static analysis and tests
   check --fix       Apply automatic lint fixes, then run check
   fix               Apply automatic lint fixes, format the code, then run check
   format            Format the code
@@ -48,13 +48,14 @@ fn check(fix: bool) -> Result {
 	if fix {
 		apply_lint_fixes()?;
 	}
-	lint()
+	lint()?;
+	cargo(&["test", "--workspace", "--locked"])
 }
 
 fn fix() -> Result {
 	apply_lint_fixes()?;
 	format(false)?;
-	lint()
+	check(false)
 }
 
 fn apply_lint_fixes() -> Result {
