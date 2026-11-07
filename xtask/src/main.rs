@@ -9,8 +9,9 @@ use image::RgbaImage;
 use image::imageops::{self, FilterType};
 use resvg::{tiny_skia, usvg};
 
-const SIZES: [u32; 15] = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256];
-const RENDER_SIZE: u32 = SIZES[SIZES.len() - 1] * 4;
+const ICON_SIZES: [u32; 15] =
+	[16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256];
+const SOURCE_RENDER_SIZE: u32 = ICON_SIZES[ICON_SIZES.len() - 1] * 4;
 const USAGE: &str = "Usage: cargo xtask <task>
 
 Tasks:
@@ -24,9 +25,9 @@ Tasks:
 type Result<T = ()> = std::result::Result<T, Box<dyn Error>>;
 
 fn main() -> ExitCode {
-	let args: Vec<String> = env::args().skip(1).collect();
-	let args: Vec<&str> = args.iter().map(String::as_str).collect();
-	let result = match args.as_slice() {
+	let arguments: Vec<String> = env::args().skip(1).collect();
+	let argument_slices: Vec<&str> = arguments.iter().map(String::as_str).collect();
+	let result = match argument_slices.as_slice() {
 		["check"] => check(false),
 		["check", "--fix"] => check(true),
 		["fix"] => fix(),
@@ -44,12 +45,12 @@ fn main() -> ExitCode {
 	}
 }
 
-fn check(fix: bool) -> Result {
-	if fix {
+fn check(apply_fixes_first: bool) -> Result {
+	if apply_fixes_first {
 		apply_lint_fixes()?;
 	}
-	lint()?;
-	cargo(&["test", "--workspace", "--locked"])
+	run_lints()?;
+	run_cargo(&["test", "--workspace", "--locked"])
 }
 
 fn fix() -> Result {
@@ -59,7 +60,7 @@ fn fix() -> Result {
 }
 
 fn apply_lint_fixes() -> Result {
-	cargo(&[
+	run_cargo(&[
 		"clippy",
 		"--workspace",
 		"--all-targets",
@@ -69,8 +70,8 @@ fn apply_lint_fixes() -> Result {
 	])
 }
 
-fn lint() -> Result {
-	cargo(&[
+fn run_lints() -> Result {
+	run_cargo(&[
 		"clippy",
 		"--workspace",
 		"--all-targets",
@@ -81,17 +82,18 @@ fn lint() -> Result {
 	])
 }
 
-fn format(check: bool) -> Result {
-	let mut args = vec!["fmt", "--all"];
-	if check {
-		args.push("--check");
+fn format(check_only: bool) -> Result {
+	let mut fmt_arguments = vec!["fmt", "--all"];
+	if check_only {
+		fmt_arguments.push("--check");
 	}
-	cargo(&args)
+	run_cargo(&fmt_arguments)
 }
 
-fn cargo(args: &[&str]) -> Result {
+fn run_cargo(args: &[&str]) -> Result {
 	let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-	let status = Command::new(cargo).args(args).current_dir(root()).status()?;
+	let status =
+		Command::new(cargo).args(args).current_dir(workspace_root()).status()?;
 	if !status.success() {
 		return Err(format!("cargo {} failed", args.join(" ")).into());
 	}
@@ -99,36 +101,40 @@ fn cargo(args: &[&str]) -> Result {
 }
 
 fn icon() -> Result {
-	let assets = root().join("assets");
+	let assets = workspace_root().join("assets");
 	let source = assets.join("icon.svg");
 	let output = assets.join("icon.ico");
 
-	let master = render(&source, RENDER_SIZE)?;
+	let source_render = render_svg(&source, SOURCE_RENDER_SIZE)?;
 	let mut icon = IconDir::new(ResourceType::Icon);
-	for size in SIZES {
-		let frame =
-			unpremultiply(imageops::resize(&master, size, size, FilterType::Lanczos3));
-		let image = IconImage::from_rgba_data(size, size, frame.into_raw());
+	for size in ICON_SIZES {
+		let resized_frame = unpremultiply(imageops::resize(
+			&source_render,
+			size,
+			size,
+			FilterType::Lanczos3,
+		));
+		let image = IconImage::from_rgba_data(size, size, resized_frame.into_raw());
 		icon.add_entry(IconDirEntry::encode_as_png(&image)?);
 	}
 	icon.write(File::create(&output)?)?;
-	verify(&output)?;
+	verify_icon_sizes(&output)?;
 
 	println!("Created {}", output.display());
-	println!("Source render: {RENDER_SIZE}x{RENDER_SIZE}");
-	println!("Embedded sizes: {SIZES:?}");
+	println!("Source render: {SOURCE_RENDER_SIZE}x{SOURCE_RENDER_SIZE}");
+	println!("Embedded sizes: {ICON_SIZES:?}");
 	Ok(())
 }
 
-fn root() -> PathBuf {
+fn workspace_root() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR"))
 		.parent()
 		.expect("xtask is inside the workspace")
 		.to_path_buf()
 }
 
-fn render(path: &Path, size: u32) -> Result<RgbaImage> {
-	let tree = usvg::Tree::from_data(&fs::read(path)?, &usvg::Options::default())?;
+fn render_svg(svg_path: &Path, size: u32) -> Result<RgbaImage> {
+	let tree = usvg::Tree::from_data(&fs::read(svg_path)?, &usvg::Options::default())?;
 	let mut pixmap = tiny_skia::Pixmap::new(size, size).ok_or("invalid render size")?;
 	let scale_x = size as f32 / tree.size().width();
 	let scale_y = size as f32 / tree.size().height();
@@ -140,24 +146,37 @@ fn render(path: &Path, size: u32) -> Result<RgbaImage> {
 
 fn unpremultiply(mut image: RgbaImage) -> RgbaImage {
 	for pixel in image.pixels_mut() {
-		let [r, g, b, a] = pixel.0;
-		let channel = |value: u8| {
-			let value = u32::from(value.min(a));
-			((value * 255 + u32::from(a) / 2) / u32::from(a)) as u8
+		let [red, green, blue, alpha] = pixel.0;
+		let unpremultiplied_channel = |value: u8| {
+			let value = u32::from(value.min(alpha));
+			((value * 255 + u32::from(alpha) / 2) / u32::from(alpha)) as u8
 		};
-		pixel.0 = if a == 0 { [0; 4] } else { [channel(r), channel(g), channel(b), a] };
+		pixel.0 = if alpha == 0 {
+			[0; 4]
+		} else {
+			[
+				unpremultiplied_channel(red),
+				unpremultiplied_channel(green),
+				unpremultiplied_channel(blue),
+				alpha,
+			]
+		};
 	}
 	image
 }
 
-fn verify(path: &Path) -> Result {
-	let icon = IconDir::read(File::open(path)?)?;
-	let mut actual: Vec<(u32, u32)> =
+fn verify_icon_sizes(icon_path: &Path) -> Result {
+	let icon = IconDir::read(File::open(icon_path)?)?;
+	let mut actual_sizes: Vec<(u32, u32)> =
 		icon.entries().iter().map(|entry| (entry.width(), entry.height())).collect();
-	actual.sort_unstable();
-	let expected: Vec<(u32, u32)> = SIZES.iter().map(|&size| (size, size)).collect();
-	if actual != expected {
-		return Err(format!("expected sizes {expected:?}, found {actual:?}").into());
+	actual_sizes.sort_unstable();
+	let expected_sizes: Vec<(u32, u32)> =
+		ICON_SIZES.iter().map(|&size| (size, size)).collect();
+	if actual_sizes != expected_sizes {
+		return Err(format!(
+			"expected sizes {expected_sizes:?}, found {actual_sizes:?}"
+		)
+		.into());
 	}
 	Ok(())
 }

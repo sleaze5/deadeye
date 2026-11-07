@@ -7,21 +7,33 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::PCWSTR;
 use windows_sys::w;
 
-type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+const APP_TITLE: PCWSTR = w!("Deadeye");
+const APP_ICON_RESOURCE_ID: usize = 1;
 
-pub fn wide(text: &str) -> Vec<u16> {
+type WindowProcedure = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+
+pub fn null_terminated_utf16(text: &str) -> Vec<u16> {
 	text.encode_utf16().chain(Some(0)).collect()
 }
 
-pub fn instance() -> HINSTANCE {
+pub fn module_instance() -> HINSTANCE {
 	unsafe { GetModuleHandleW(ptr::null()) }
 }
 
-pub fn icon(size: i32) -> HICON {
-	unsafe { LoadImageW(instance(), 1 as PCWSTR, IMAGE_ICON, size, size, LR_SHARED) }
+pub fn load_app_icon(size_in_pixels: i32) -> HICON {
+	unsafe {
+		LoadImageW(
+			module_instance(),
+			APP_ICON_RESOURCE_ID as PCWSTR,
+			IMAGE_ICON,
+			size_in_pixels,
+			size_in_pixels,
+			LR_SHARED,
+		)
+	}
 }
 
-pub fn bitmap_info(width: i32, height: i32) -> BITMAPINFO {
+pub fn top_down_32_bit_bitmap_info(width: i32, height: i32) -> BITMAPINFO {
 	BITMAPINFO {
 		bmiHeader: BITMAPINFOHEADER {
 			biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -37,26 +49,26 @@ pub fn bitmap_info(width: i32, height: i32) -> BITMAPINFO {
 }
 
 pub fn create_window(
-	name: &str,
-	class: PCWSTR,
-	wnd_proc: WndProc,
+	window_description: &str,
+	class_name: PCWSTR,
+	window_procedure: WindowProcedure,
 	style: WINDOW_STYLE,
 	ex_style: WINDOW_EX_STYLE,
 ) -> HWND {
-	let class_info = WNDCLASSW {
-		lpfnWndProc: Some(wnd_proc),
-		hInstance: instance(),
-		lpszClassName: class,
+	let window_class = WNDCLASSW {
+		lpfnWndProc: Some(window_procedure),
+		hInstance: module_instance(),
+		lpszClassName: class_name,
 		..unsafe { mem::zeroed() }
 	};
-	if unsafe { RegisterClassW(&class_info) } == 0 {
-		fail("Failed to register window class.");
+	if unsafe { RegisterClassW(&window_class) } == 0 {
+		exit_with_error("Failed to register window class.");
 	}
-	let hwnd = unsafe {
+	let window = unsafe {
 		CreateWindowExW(
 			ex_style,
-			class,
-			w!("Deadeye"),
+			class_name,
+			APP_TITLE,
 			style,
 			0,
 			0,
@@ -64,35 +76,40 @@ pub fn create_window(
 			0,
 			ptr::null_mut(),
 			ptr::null_mut(),
-			instance(),
+			module_instance(),
 			ptr::null(),
 		)
 	};
-	if hwnd.is_null() {
-		fail(&format!("Failed to create {name} window."));
+	if window.is_null() {
+		exit_with_error(&format!("Failed to create {window_description} window."));
 	}
-	hwnd
+	window
 }
 
 pub fn show_error(owner: HWND, message: &str) {
 	unsafe {
-		MessageBoxW(owner, wide(message).as_ptr(), w!("Deadeye"), MB_ICONERROR);
+		MessageBoxW(
+			owner,
+			null_terminated_utf16(message).as_ptr(),
+			APP_TITLE,
+			MB_ICONERROR,
+		);
 	}
 }
 
-pub fn confirm(owner: HWND, message: &str) -> bool {
-	let answer = unsafe {
+pub fn ask_yes_no(owner: HWND, message: &str) -> bool {
+	let clicked_button = unsafe {
 		MessageBoxW(
 			owner,
-			wide(message).as_ptr(),
-			w!("Deadeye"),
+			null_terminated_utf16(message).as_ptr(),
+			APP_TITLE,
 			MB_YESNO | MB_ICONQUESTION,
 		)
 	};
-	answer == IDYES
+	clicked_button == IDYES
 }
 
-pub fn fail(message: &str) -> ! {
+pub fn exit_with_error(message: &str) -> ! {
 	show_error(ptr::null_mut(), message);
 	std::process::exit(1);
 }

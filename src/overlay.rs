@@ -10,13 +10,15 @@ use windows_sys::w;
 use crate::config::Crosshair;
 use crate::{profiles, render, win};
 
+const DEFAULT_DPI: f32 = 96.0;
+
 thread_local! {
-	static WINDOW: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
-	static CROSSHAIR: Cell<Crosshair> = Cell::new(Crosshair::default());
+	static OVERLAY_WINDOW: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
+	static DISPLAYED_CROSSHAIR: Cell<Crosshair> = Cell::new(Crosshair::default());
 }
 
 pub fn create(crosshair: Crosshair) {
-	let hwnd = win::create_window(
+	let overlay_window = win::create_window(
 		"overlay",
 		w!("DeadeyeOverlay"),
 		wnd_proc,
@@ -27,105 +29,118 @@ pub fn create(crosshair: Crosshair) {
 			| WS_EX_TOOLWINDOW
 			| WS_EX_NOACTIVATE,
 	);
-	WINDOW.set(hwnd);
-	apply(crosshair);
+	OVERLAY_WINDOW.set(overlay_window);
+	display(crosshair);
 	unsafe {
-		ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+		ShowWindow(overlay_window, SW_SHOWNOACTIVATE);
 	}
 }
 
-pub fn crosshair() -> Crosshair {
-	CROSSHAIR.get()
+pub fn displayed_crosshair() -> Crosshair {
+	DISPLAYED_CROSSHAIR.get()
 }
 
-pub fn apply(crosshair: Crosshair) {
-	CROSSHAIR.set(crosshair);
-	present(WINDOW.get());
+pub fn display(crosshair: Crosshair) {
+	DISPLAYED_CROSSHAIR.set(crosshair);
+	draw_to_window(OVERLAY_WINDOW.get());
 }
 
-pub fn refresh() {
-	present(WINDOW.get());
+pub fn redraw() {
+	draw_to_window(OVERLAY_WINDOW.get());
 }
 
-pub fn scale() -> f32 {
-	if profiles::windows_scaling() {
-		unsafe { GetDpiForWindow(WINDOW.get()) as f32 / 96.0 }
+pub fn scale_factor() -> f32 {
+	if profiles::uses_windows_scaling() {
+		unsafe { GetDpiForWindow(OVERLAY_WINDOW.get()) as f32 / DEFAULT_DPI }
 	} else {
 		1.0
 	}
 }
 
 pub fn is_visible() -> bool {
-	unsafe { IsWindowVisible(WINDOW.get()) != 0 }
+	unsafe { IsWindowVisible(OVERLAY_WINDOW.get()) != 0 }
 }
 
-pub fn toggle() {
-	let cmd = if is_visible() { SW_HIDE } else { SW_SHOWNOACTIVATE };
+pub fn toggle_visibility() {
+	let show_command = if is_visible() { SW_HIDE } else { SW_SHOWNOACTIVATE };
 	unsafe {
-		ShowWindow(WINDOW.get(), cmd);
+		ShowWindow(OVERLAY_WINDOW.get(), show_command);
 	}
 }
 
-fn present(hwnd: HWND) {
-	let image = render::render(&CROSSHAIR.get(), scale());
-	let info = win::bitmap_info(image.size, image.size);
+fn draw_to_window(overlay_window: HWND) {
+	let crosshair_image =
+		render::render_crosshair(&DISPLAYED_CROSSHAIR.get(), scale_factor());
+	let bitmap_info = win::top_down_32_bit_bitmap_info(
+		crosshair_image.side_length,
+		crosshair_image.side_length,
+	);
 	unsafe {
-		let screen = GetDC(ptr::null_mut());
-		let memory = CreateCompatibleDC(screen);
-		let mut bits = ptr::null_mut();
+		let screen_device_context = GetDC(ptr::null_mut());
+		let memory_device_context = CreateCompatibleDC(screen_device_context);
+		let mut bitmap_pixels = ptr::null_mut();
 		let bitmap = CreateDIBSection(
-			screen,
-			&info,
+			screen_device_context,
+			&bitmap_info,
 			DIB_RGB_COLORS,
-			&mut bits,
+			&mut bitmap_pixels,
 			ptr::null_mut(),
 			0,
 		);
 		if bitmap.is_null() {
-			DeleteDC(memory);
-			ReleaseDC(ptr::null_mut(), screen);
+			DeleteDC(memory_device_context);
+			ReleaseDC(ptr::null_mut(), screen_device_context);
 			win::show_error(ptr::null_mut(), "Failed to draw the crosshair.");
 			return;
 		}
 		ptr::copy_nonoverlapping(
-			image.pixels.as_ptr(),
-			bits.cast(),
-			image.pixels.len(),
+			crosshair_image.pixels.as_ptr(),
+			bitmap_pixels.cast(),
+			crosshair_image.pixels.len(),
 		);
-		let previous = SelectObject(memory, bitmap);
+		let previously_selected_bitmap = SelectObject(memory_device_context, bitmap);
 
-		let position = POINT {
-			x: GetSystemMetrics(SM_CXSCREEN) / 2 - image.size / 2,
-			y: GetSystemMetrics(SM_CYSCREEN) / 2 - image.size / 2,
+		let window_top_left = POINT {
+			x: GetSystemMetrics(SM_CXSCREEN) / 2 - crosshair_image.side_length / 2,
+			y: GetSystemMetrics(SM_CYSCREEN) / 2 - crosshair_image.side_length / 2,
 		};
-		let size = SIZE { cx: image.size, cy: image.size };
-		let source = POINT { x: 0, y: 0 };
-		let blend = BLENDFUNCTION {
+		let window_size =
+			SIZE { cx: crosshair_image.side_length, cy: crosshair_image.side_length };
+		let source_top_left = POINT { x: 0, y: 0 };
+		let blend_function = BLENDFUNCTION {
 			BlendOp: AC_SRC_OVER as u8,
 			BlendFlags: 0,
 			SourceConstantAlpha: 255,
 			AlphaFormat: AC_SRC_ALPHA as u8,
 		};
 		UpdateLayeredWindow(
-			hwnd, screen, &position, &size, memory, &source, 0, &blend, ULW_ALPHA,
+			overlay_window,
+			screen_device_context,
+			&window_top_left,
+			&window_size,
+			memory_device_context,
+			&source_top_left,
+			0,
+			&blend_function,
+			ULW_ALPHA,
 		);
 
-		SelectObject(memory, previous);
+		SelectObject(memory_device_context, previously_selected_bitmap);
 		DeleteObject(bitmap);
-		DeleteDC(memory);
-		ReleaseDC(ptr::null_mut(), screen);
+		DeleteDC(memory_device_context);
+		ReleaseDC(ptr::null_mut(), screen_device_context);
 	}
 }
 
 unsafe extern "system" fn wnd_proc(
 	hwnd: HWND,
-	msg: u32,
+	message: u32,
 	wparam: WPARAM,
 	lparam: LPARAM,
 ) -> LRESULT {
-	match msg {
-		WM_DISPLAYCHANGE | WM_DPICHANGED => present(hwnd),
-		_ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+	match message {
+		WM_DISPLAYCHANGE | WM_DPICHANGED => draw_to_window(hwnd),
+		_ => return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
 	}
 	0
 }

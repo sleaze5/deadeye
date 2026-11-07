@@ -14,7 +14,7 @@ fn main() {
 
 fn version_resource() -> PathBuf {
 	let version = env::var("CARGO_PKG_VERSION").unwrap();
-	let numbers = version
+	let version_numbers = version
 		.split(['.', '-', '+'])
 		.take(3)
 		.chain(["0"])
@@ -22,12 +22,12 @@ fn version_resource() -> PathBuf {
 		.join(",");
 	let description = env::var("CARGO_PKG_DESCRIPTION").unwrap();
 	let authors = env::var("CARGO_PKG_AUTHORS").unwrap();
-	let rc = format!(
+	let version_resource_script = format!(
 		r#"#include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION {numbers}
-PRODUCTVERSION {numbers}
+FILEVERSION {version_numbers}
+PRODUCTVERSION {version_numbers}
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -52,7 +52,7 @@ BEGIN
 END
 "#
 	);
-	let path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("version.rc");
-	fs::write(&path, rc).unwrap();
-	path
+	let script_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("version.rc");
+	fs::write(&script_path, version_resource_script).unwrap();
+	script_path
 }

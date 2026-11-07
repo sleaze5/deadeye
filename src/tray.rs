@@ -8,99 +8,119 @@ use windows_sys::w;
 
 use crate::{overlay, settings, win};
 
-const WM_TRAY: u32 = WM_APP + 1;
-const ID_SETTINGS: usize = 1;
-const ID_TOGGLE: usize = 2;
-const ID_EXIT: usize = 3;
+const WM_TRAY_ICON: u32 = WM_APP + 1;
+const ID_MENU_OPEN_SETTINGS: usize = 1;
+const ID_MENU_TOGGLE_CROSSHAIR: usize = 2;
+const ID_MENU_EXIT: usize = 3;
 
-static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+static WM_TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 pub fn create() {
 	unsafe {
-		TASKBAR_CREATED
+		WM_TASKBAR_CREATED
 			.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 	}
-	let hwnd =
+	let tray_window =
 		win::create_window("tray", w!("DeadeyeTray"), wnd_proc, WS_OVERLAPPED, 0);
-	add_icon(hwnd);
+	add_tray_icon(tray_window);
 }
 
 unsafe extern "system" fn wnd_proc(
-	hwnd: HWND,
-	msg: u32,
+	tray_window: HWND,
+	message: u32,
 	wparam: WPARAM,
 	lparam: LPARAM,
 ) -> LRESULT {
-	match msg {
-		WM_TRAY => on_tray(hwnd, lparam as u32),
-		WM_COMMAND => on_command(hwnd, wparam & 0xFFFF),
+	match message {
+		WM_TRAY_ICON => on_tray_icon_event(tray_window, lparam as u32),
+		WM_COMMAND => on_menu_command(tray_window, wparam & 0xFFFF),
 		WM_DESTROY => unsafe {
-			Shell_NotifyIconW(NIM_DELETE, &icon_data(hwnd));
+			Shell_NotifyIconW(NIM_DELETE, &tray_icon_data(tray_window));
 			PostQuitMessage(0);
 		},
-		m if m == TASKBAR_CREATED.load(Ordering::Relaxed) => add_icon(hwnd),
-		_ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+		registered_message
+			if registered_message == WM_TASKBAR_CREATED.load(Ordering::Relaxed) =>
+		{
+			add_tray_icon(tray_window)
+		},
+		_ => return unsafe { DefWindowProcW(tray_window, message, wparam, lparam) },
 	}
 	0
 }
 
-fn on_tray(hwnd: HWND, event: u32) {
-	match event {
+fn on_tray_icon_event(tray_window: HWND, mouse_message: u32) {
+	match mouse_message {
 		WM_LBUTTONUP => settings::open(),
-		WM_RBUTTONUP => show_menu(hwnd),
+		WM_RBUTTONUP => show_context_menu(tray_window),
 		_ => {},
 	}
 }
 
-fn on_command(hwnd: HWND, id: usize) {
-	match id {
-		ID_SETTINGS => settings::open(),
-		ID_TOGGLE => overlay::toggle(),
-		ID_EXIT => {
+fn on_menu_command(tray_window: HWND, menu_item_id: usize) {
+	match menu_item_id {
+		ID_MENU_OPEN_SETTINGS => settings::open(),
+		ID_MENU_TOGGLE_CROSSHAIR => overlay::toggle_visibility(),
+		ID_MENU_EXIT => {
 			settings::close();
 			unsafe {
-				DestroyWindow(hwnd);
+				DestroyWindow(tray_window);
 			}
 		},
 		_ => {},
 	}
 }
 
-fn show_menu(hwnd: HWND) {
-	let check = if overlay::is_visible() { MF_CHECKED } else { MF_UNCHECKED };
+fn show_context_menu(tray_window: HWND) {
+	let crosshair_check_state =
+		if overlay::is_visible() { MF_CHECKED } else { MF_UNCHECKED };
 	unsafe {
-		let menu = CreatePopupMenu();
-		AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings…"));
-		AppendMenuW(menu, MF_STRING | check, ID_TOGGLE, w!("Show crosshair"));
-		AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-		AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Exit"));
-		SetMenuDefaultItem(menu, ID_SETTINGS as u32, 0);
+		let context_menu = CreatePopupMenu();
+		AppendMenuW(context_menu, MF_STRING, ID_MENU_OPEN_SETTINGS, w!("Settings…"));
+		AppendMenuW(
+			context_menu,
+			MF_STRING | crosshair_check_state,
+			ID_MENU_TOGGLE_CROSSHAIR,
+			w!("Show crosshair"),
+		);
+		AppendMenuW(context_menu, MF_SEPARATOR, 0, ptr::null());
+		AppendMenuW(context_menu, MF_STRING, ID_MENU_EXIT, w!("Exit"));
+		SetMenuDefaultItem(context_menu, ID_MENU_OPEN_SETTINGS as u32, 0);
 
-		let mut pt: POINT = mem::zeroed();
-		GetCursorPos(&mut pt);
-		SetForegroundWindow(hwnd);
-		TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, ptr::null());
-		PostMessageW(hwnd, WM_NULL, 0, 0);
-		DestroyMenu(menu);
+		let mut cursor_position: POINT = mem::zeroed();
+		GetCursorPos(&mut cursor_position);
+		SetForegroundWindow(tray_window);
+		TrackPopupMenu(
+			context_menu,
+			TPM_RIGHTBUTTON,
+			cursor_position.x,
+			cursor_position.y,
+			0,
+			tray_window,
+			ptr::null(),
+		);
+		PostMessageW(tray_window, WM_NULL, 0, 0);
+		DestroyMenu(context_menu);
 	}
 }
 
-fn add_icon(hwnd: HWND) {
+fn add_tray_icon(tray_window: HWND) {
 	unsafe {
-		Shell_NotifyIconW(NIM_ADD, &icon_data(hwnd));
+		Shell_NotifyIconW(NIM_ADD, &tray_icon_data(tray_window));
 	}
 }
 
-fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
-	let mut nid: NOTIFYICONDATAW = unsafe { mem::zeroed() };
-	nid.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
-	nid.hWnd = hwnd;
-	nid.uID = 1;
-	nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-	nid.uCallbackMessage = WM_TRAY;
-	nid.hIcon = win::icon(unsafe { GetSystemMetrics(SM_CXSMICON) });
-	for (dst, src) in nid.szTip.iter_mut().zip("Deadeye".encode_utf16()) {
-		*dst = src;
+fn tray_icon_data(tray_window: HWND) -> NOTIFYICONDATAW {
+	let mut icon_data: NOTIFYICONDATAW = unsafe { mem::zeroed() };
+	icon_data.cbSize = mem::size_of::<NOTIFYICONDATAW>() as u32;
+	icon_data.hWnd = tray_window;
+	icon_data.uID = 1;
+	icon_data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+	icon_data.uCallbackMessage = WM_TRAY_ICON;
+	icon_data.hIcon = win::load_app_icon(unsafe { GetSystemMetrics(SM_CXSMICON) });
+	for (tip_character, title_character) in
+		icon_data.szTip.iter_mut().zip("Deadeye".encode_utf16())
+	{
+		*tip_character = title_character;
 	}
-	nid
+	icon_data
 }
