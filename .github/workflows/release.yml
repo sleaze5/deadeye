@@ -42,6 +42,10 @@ jobs:
               with:
                   targets: ${{ env.TARGET }}
 
+            - name: Test
+              if: steps.version.outputs.exists != 'true'
+              run: cargo test --locked --package deadeye --target "$TARGET"
+
             - name: Build
               if: steps.version.outputs.exists != 'true'
               run: |

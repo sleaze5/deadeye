@@ -23,8 +23,8 @@ use self::ids::*;
 use crate::config::{Bars, Color, Crosshair, Dot, Outline, Shape, same_name};
 use crate::{overlay, profiles, render, win};
 
-const SHAPE_NAMES: [(Shape, &str); 2] =
-	[(Shape::Rounded, "Rounded"), (Shape::Sharp, "Sharp")];
+const SHAPE_NAMES: [(Shape, PCWSTR); 2] =
+	[(Shape::Rounded, w!("Rounded")), (Shape::Sharp, w!("Sharp"))];
 
 thread_local! {
 	static DIALOG: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
@@ -98,14 +98,7 @@ fn init(dialog: HWND) {
 		SendMessageW(dialog, WM_SETICON, ICON_SMALL as usize, small as isize);
 		for id in SHAPES {
 			for (_, name) in SHAPE_NAMES {
-				let name = win::wide(name);
-				SendDlgItemMessageW(
-					dialog,
-					id,
-					CB_ADDSTRING,
-					0,
-					name.as_ptr() as isize,
-				);
+				SendDlgItemMessageW(dialog, id, CB_ADDSTRING, 0, name as isize);
 			}
 		}
 		for (id, range) in NUMBERS {

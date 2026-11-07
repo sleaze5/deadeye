@@ -370,8 +370,12 @@ pub fn save(config: &Config) -> Result<(), String> {
 	config
 		.serialize(&mut Serializer::with_formatter(&mut json, formatter))
 		.map_err(|e| e.to_string())?;
+	// Writing a temporary file and renaming it over the old one means a crash
+	// mid-write can't leave a truncated settings file behind.
+	let temp = path.with_extension("json.tmp");
 	fs::create_dir_all(path.parent().expect("config path has a parent"))
-		.and_then(|()| fs::write(&path, json))
+		.and_then(|()| fs::write(&temp, json))
+		.and_then(|()| fs::rename(&temp, &path))
 		.map_err(|e| format!("{}: {e}", path.display()))
 }
 
